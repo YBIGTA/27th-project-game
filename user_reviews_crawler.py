@@ -385,6 +385,37 @@ def get_user_reviews_from_profile(steamid):
                                     if content_elem:
                                         review_text = content_elem.get_text(strip=True)
                                 
+                                # 추천/비추천 정보 추출
+                                if rightcol:
+                                    # "Recommended" 또는 "Not Recommended" 텍스트 찾기
+                                    recommendation_text = rightcol.find(string=re.compile(r'Recommended|Not Recommended'))
+                                    if recommendation_text:
+                                        # 정확한 텍스트 비교로 추천/비추천 구분
+                                        voted_up = recommendation_text.strip() == "Recommended"
+                                        # print(f"      🔍 추천 여부: {recommendation_text.strip()}")
+                                
+                                # 투표 수 추출 (새로운 방법: class="header"에서 추출)
+                                header_elem = review_container.find('div', class_='header')
+                                if header_elem:
+                                    header_text = header_elem.get_text()
+                                    # "1명이 이 평가가 유용하다고 함" 또는 "1 person found this review helpful"에서 숫자 추출
+                                    votes_match = re.search(r'(\d+)', header_text)
+                                    if votes_match:
+                                        votes_up = int(votes_match.group(1))
+                                        # print(f"      🔍 도움됨: {votes_up}명")
+                                    else:
+                                        votes_up = 0  # 숫자가 없으면 0
+                                else:
+                                    votes_up = 0  # header가 없으면 0
+                                
+                                # 리뷰 날짜 추출
+                                if rightcol:
+                                    # "Posted" 패턴 찾기 (월만 있는 경우도 포함)
+                                    date_text = rightcol.find(string=re.compile(r'Posted.*'))
+                                    if date_text:
+                                        review_date = date_text.strip()
+                                        # print(f"      🔍 날짜: {review_date}")
+                                
                                 # 플레이 시간 추출
                                 hours_elem = rightcol.find('div', class_='hours') if rightcol else None
                                 if hours_elem:
@@ -404,7 +435,6 @@ def get_user_reviews_from_profile(steamid):
                                     'votes_up': votes_up,
                                     'playtime_forever': playtime_minutes,
                                     'review_date': review_date,
-                                    'data_source': 'profile_page'
                                 }
                                 
                                 all_reviews.append(review_data)
@@ -508,7 +538,7 @@ def main():
     
     # 안전 모드 설정
     SAFE_MODE = True  # True: 더 긴 지연시간, False: 빠른 처리
-    MAX_USERS_PER_SESSION = 50000  # 한 번에 처리할 최대 사용자 수
+    MAX_USERS_PER_SESSION = 10000  # 한 번에 처리할 최대 사용자 수
     
     # 출력 디렉토리 생성
     os.makedirs("outputs", exist_ok=True)
