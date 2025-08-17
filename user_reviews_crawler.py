@@ -11,36 +11,25 @@ import sys
 import re
 from bs4 import BeautifulSoup
 
-# HTTP 요청 헤더 (차단 회피용)
-HEADERS_LIST = [
-    {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    },
-    {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    },
-    {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.7,ko;q=0.3",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive",
-    }
-]
+# HTTP 요청 헤더 (일관된 User-Agent 사용으로 Steam 의심 최소화)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0"
+}
 
-def get_random_headers():
-    """랜덤한 헤더 반환 (차단 회피)"""
-    return random.choice(HEADERS_LIST)
+def get_headers():
+    """일관된 헤더 반환 (Steam 의심 최소화)"""
+    return HEADERS.copy()
 
 def sleep_jitter(min_s=1.0, max_s=2.0):
     """요청 사이에 랜덤 지연"""
@@ -148,7 +137,7 @@ def get_user_games_library(steamid):
     #     # 1. 먼저 Steam API로 시도 (API 키 없이도 공개 라이브러리는 접근 가능)
     #     api_url = f"http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?steamid={steamid}&format=json&include_appinfo=true&include_played_free_games=true"
         
-        response = requests.get(api_url, headers=get_random_headers(), timeout=15)
+        response = requests.get(api_url, headers=get_headers(), timeout=15)
         if response.status_code == 200:
             data = response.json()
             if 'response' in data and 'games' in data['response']:
@@ -177,7 +166,7 @@ def get_user_games_library(steamid):
         print("  🔄 프로필 페이지에서 게임 정보 수집 시도...")
         games_url = f"https://steamcommunity.com/profiles/{steamid}/games/?tab=all"
         
-        response = requests.get(games_url, headers=get_random_headers(), timeout=15)
+        response = requests.get(games_url, headers=get_headers(), timeout=15)
         
         if response.status_code != 200:
             print(f"  ⚠️ 게임 라이브러리 페이지 접근 실패 (상태코드: {response.status_code})")
@@ -304,7 +293,7 @@ def get_user_reviews_from_profile(steamid):
             
             print(f"    📄 페이지 {page_num} 수집 중...")
             
-            response = requests.get(reviews_url, headers=get_random_headers(), timeout=15)
+            response = requests.get(reviews_url, headers=get_headers(), timeout=15)
             if response.status_code != 200:
                 print(f"  ⚠️ 리뷰 페이지 접근 실패 (상태코드: {response.status_code})")
                 break
@@ -355,20 +344,48 @@ def get_user_reviews_from_profile(steamid):
                                 seen_appids.add(appid)
                                 new_reviews_found += 1
                                 
-                                # AppID로 게임 이름 가져오기
+                                # AppID로 게임 이름 가져오기 (강화된 버전)
+                                game_name = f"Game_{appid}"  # 기본값
+                                
                                 try:
+                                    # 1차 시도: Steam Store API
                                     store_url = f"https://store.steampowered.com/api/appdetails?appids={appid}&format=json"
-                                    store_response = requests.get(store_url, headers=get_random_headers(), timeout=5)
+                                    store_response = requests.get(store_url, headers=get_headers(), timeout=10)
+                                    
                                     if store_response.status_code == 200:
                                         store_data = store_response.json()
                                         if str(appid) in store_data and store_data[str(appid)]['success']:
                                             game_name = store_data[str(appid)]['data'].get('name', f"Game_{appid}")
-                                        else:
-                                            game_name = f"Game_{appid}"
-                                    else:
-                                        game_name = f"Game_{appid}"
-                                except:
-                                    game_name = f"Game_{appid}"
+                                        # 디버그 출력 제거
+                                    # 실패 시에도 출력하지 않음
+                                        
+                                except Exception:
+                                    # 오류 발생 시에도 출력하지 않음
+                                    pass
+                                
+                                # 2차 시도: Steam Community 페이지에서 게임 이름 추출
+                                if game_name == f"Game_{appid}":
+                                    try:
+                                        community_url = f"https://steamcommunity.com/app/{appid}"
+                                        community_response = requests.get(community_url, headers=get_headers(), timeout=8)
+                                        
+                                        if community_response.status_code == 200:
+                                            community_soup = BeautifulSoup(community_response.text, 'html.parser')
+                                            
+                                            # 페이지 제목에서 게임 이름 추출
+                                            title_elem = community_soup.find('title')
+                                            if title_elem:
+                                                title_text = title_elem.get_text()
+                                                # "게임명 on Steam" 형식에서 게임명만 추출
+                                                if " on Steam" in title_text:
+                                                    extracted_name = title_text.replace(" on Steam", "").strip()
+                                                    if extracted_name and extracted_name != "Steam":
+                                                        game_name = extracted_name
+                                        # 디버그 출력 제거
+                                        
+                                    except Exception:
+                                        # 오류 발생 시에도 출력하지 않음
+                                        pass
                                 
                                 # 실제 리뷰 데이터 추출
                                 review_text = "리뷰 텍스트 추출 중..."
