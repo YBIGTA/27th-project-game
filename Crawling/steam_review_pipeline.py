@@ -81,9 +81,9 @@ def get_reviews(appid, max_reviews=200, lang="english"):
     return out
 
 def main():
-    os.makedirs("outputs", exist_ok=True)
-    meta_csv = "metacritic_pc_userscore_green.csv"  # 네 CSV 경로
-    out_csv = "outputs/steam_reviews.csv"
+    os.makedirs("../outputs", exist_ok=True)
+    meta_csv = "../outputs/metacritic_pc_userscore_green.csv"  # 네 CSV 경로
+    out_csv = "../outputs/steam_reviews.csv"
     
     df = pd.read_csv(meta_csv)
     all_reviews = []

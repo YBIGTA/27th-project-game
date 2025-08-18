@@ -25,8 +25,8 @@ async def fetch_reviews(session, appid, steamid):
         return []
 
 # ---- 메인 ----
-async def main_async(input_csv="outputs/steam_reviews.csv",
-                     out_csv="outputs/user_game_matrix.csv",
+async def main_async(input_csv="../outputs/steam_reviews.csv",
+                     out_csv="../outputs/user_game_matrix.csv",
                      test=False):
 
     df = pd.read_csv(input_csv)
