@@ -34,7 +34,7 @@ async def main_async(input_csv="../outputs/steam_reviews.csv",
     # 유저 ID 컬럼 통일
     if "author_steamid" in df.columns:
         df = df.rename(columns={"author_steamid": "steamid"})
-    
+
     if "steamid" not in df.columns or "appid" not in df.columns:
         raise ValueError("⚠️ 입력 CSV에 'steamid'와 'appid' 컬럼이 필요합니다!")
 
@@ -42,36 +42,38 @@ async def main_async(input_csv="../outputs/steam_reviews.csv",
 
     # ---- test 모드 ----
     if test:
-        unique_pairs = unique_pairs[:100]  # 100개만 실행
+        unique_pairs = unique_pairs[:100]
         print("🧪 테스트 모드 실행 (100개만 처리)")
-    
+
     total = len(unique_pairs)
     print(f"요청 대상: {total} (appid+steamid 조합)")
 
-    tasks = []
     results = []
-
     start_time = time.time()
+
     connector = aiohttp.TCPConnector(limit=50)
     async with aiohttp.ClientSession(connector=connector) as session:
+        tasks, metas = [], []
         for i, (appid, steamid) in enumerate(unique_pairs, 1):
             tasks.append(fetch_reviews(session, appid, steamid))
+            metas.append((appid, steamid))
 
-            if len(tasks) >= 100:  # 100개씩 실행
-                responses = await asyncio.gather(*tasks)
-                tasks = []
+            # 100개씩 실행
+            if len(tasks) >= 100:
+                responses = await asyncio.gather(*tasks, return_exceptions=False)
 
-                for res in responses:
+                for (a, s), res in zip(metas, responses):
                     for r in res:
                         author = r.get("author", {})
-                        #print("author dict:", author)  
-                        #print("steamid:", author.get("steamid"))
                         results.append({
-                            "appid": appid,
-                            "steamid": str(author.get("steamid", steamid)),
+                            "appid": a,
+                            "steamid": str(author.get("steamid", s)),
                             "voted_up": r.get("voted_up"),
                             "playtime_forever": author.get("playtime_forever", 0),
                         })
+
+                # 초기화
+                tasks, metas = [], []
 
                 # ---- 진행률 출력 ----
                 if i % 500 == 0 or i == total:
@@ -85,28 +87,25 @@ async def main_async(input_csv="../outputs/steam_reviews.csv",
 
         # 남은 task 처리
         if tasks:
-            responses = await asyncio.gather(*tasks)
-            for res in responses:
+            responses = await asyncio.gather(*tasks, return_exceptions=False)
+            for (a, s), res in zip(metas, responses):
                 for r in res:
                     author = r.get("author", {})
                     results.append({
-                        "appid": appid,
-                        "steamid": str(author.get("steamid", steamid)),
+                        "appid": a,
+                        "steamid": str(author.get("steamid", s)),
                         "voted_up": r.get("voted_up"),
                         "playtime_forever": author.get("playtime_forever", 0),
                     })
 
     out_df = pd.DataFrame(results)
 
-    # 리뷰 1개뿐인 유저 제거 (협업 필터링 위해) - 주석 처리됨
-    # if "steamid" in out_df.columns:
-    #     filtered = out_df.groupby("steamid").filter(lambda x: len(x) > 1)
-    # else:
-    #     print("⚠️ steamid 컬럼 없음! 원본 그대로 저장")
-    #     filtered = out_df
-
-    # 모든 데이터 유지 (필터링 제거)
-    filtered = out_df
+    # 리뷰 1개뿐인 유저 제거 (협업 필터링 위해)
+    if "steamid" in out_df.columns:
+        filtered = out_df.groupby("steamid").filter(lambda x: len(x) > 1)
+    else:
+        print("⚠️ steamid 컬럼 없음! 원본 그대로 저장")
+        filtered = out_df
 
     filtered.to_csv(out_csv, index=False)
     print(f"✅ 저장 완료: {out_csv} (최종 {len(filtered)}개 리뷰)")
