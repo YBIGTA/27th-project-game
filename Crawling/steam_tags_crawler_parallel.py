@@ -11,6 +11,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from bs4 import BeautifulSoup
 from tqdm import tqdm
+import threading
+from queue import Queue
+import concurrent.futures
 
 def sleep_jitter(min_s=1.0, max_s=2.0):
     """요청 사이에 랜덤 지연"""
@@ -87,9 +90,10 @@ def get_game_tags(driver, appid):
         # 태그 영역 찾기
         tags = []
         
-        # 먼저 "+" 버튼이 있는지 확인하고 클릭
+        # 태그 추출 (먼저 "+ 더보기" 버튼 클릭 후 모든 태그 가져오기)
         try:
-            # 여러 가지 가능한 클래스명으로 시도
+            # 1단계: "+ 더보기" 버튼 찾기 및 클릭
+            show_more_clicked = False
             show_more_selectors = [
                 ".app_tag_add_button",
                 ".app_tag.add_button", 
@@ -98,7 +102,6 @@ def get_game_tags(driver, appid):
                 ".glance_tags .app_tag:last-child"
             ]
             
-            show_more_clicked = False
             for selector in show_more_selectors:
                 try:
                     show_more_btn = driver.find_element(By.CSS_SELECTOR, selector)
@@ -109,13 +112,13 @@ def get_game_tags(driver, appid):
                         break
                 except:
                     continue
-                    
-        except Exception as e:
-            print(f"  '+' 버튼 클릭 실패 (appid: {appid}): {e}")
-        
-        # 태그 추출
-        try:
+            
+            if not show_more_clicked:
+                print(f"    ⚠️ '+ 더보기' 버튼을 찾을 수 없음")
+            
+            # 2단계: 모든 태그 가져오기 (클릭 후)
             tag_elements = driver.find_elements(By.CSS_SELECTOR, ".app_tag")
+            
             for tag_elem in tag_elements:
                 tag_text = tag_elem.text.strip()
                 
@@ -198,11 +201,41 @@ def save_tags_data(tags_data, output_path):
             writer.writerow({
                 'appid': item['appid'],
                 'game_title': item['game_title'],
-                'tags': ', '.join(item['tags']),
+                'tags': item['tags'],
                 'tag_count': item['tag_count']
             })
     
     print(f"✅ 태그 데이터 저장 완료: {csv_path}")
+
+def process_appid_batch(appid_batch, driver, results_queue, failed_queue, driver_id):
+    """한 배치의 appid들을 처리하는 함수 (병렬 처리용)"""
+    batch_results = []
+    batch_failed = []
+    total_count = len(appid_batch)
+    
+    print(f"  🚀 드라이버 {driver_id} 시작: {total_count}개 게임 처리")
+    
+    for idx, appid in enumerate(appid_batch, 1):
+        try:
+            result = get_game_tags(driver, appid)
+            if result:
+                batch_results.append(result)
+                print(f"    ✅ 드라이버 {driver_id} [{idx}/{total_count}] AppID {appid}: '{result['game_title']}' - {result['tag_count']}개 태그")
+            else:
+                batch_failed.append(appid)
+                print(f"    ❌ 드라이버 {driver_id} [{idx}/{total_count}] AppID {appid} 처리 실패")
+            
+            # 요청 간 지연 (속도 향상)
+            sleep_jitter(0.5, 1.0)
+            
+        except Exception as e:
+            print(f"    ⚠️ 드라이버 {driver_id} [{idx}/{total_count}] AppID {appid} 처리 중 오류: {e}")
+            batch_failed.append(appid)
+    
+    # 결과를 큐에 추가
+    results_queue.put(batch_results)
+    failed_queue.put(batch_failed)
+    print(f"  🎯 드라이버 {driver_id} 완료: {len(batch_results)}개 성공, {len(batch_failed)}개 실패")
 
 def main():
     # 출력 디렉토리 생성
@@ -230,13 +263,24 @@ def main():
         print("✅ 모든 게임이 이미 크롤링 완료되었습니다!")
         return
     
-    # 웹드라이버 설정
-    print("🚀 웹드라이버 설정 중...")
-    driver = setup_driver(headless=True)
+    # 병렬 처리를 위한 웹드라이버 설정
+    print("🚀 병렬 웹드라이버 설정 중...")
+    num_drivers = 5  # 동시 실행할 브라우저 수
+    drivers = []
     
-    if not driver:
-        print("❌ 웹드라이버 설정에 실패했습니다.")
+    for i in range(num_drivers):
+        driver = setup_driver(headless=True)
+        if driver:
+            drivers.append(driver)
+            print(f"  ✅ 드라이버 {i+1} 설정 완료")
+        else:
+            print(f"  ❌ 드라이버 {i+1} 설정 실패")
+    
+    if not drivers:
+        print("❌ 모든 웹드라이버 설정에 실패했습니다.")
         return
+    
+    print(f"🎯 총 {len(drivers)}개의 드라이버로 병렬 처리 시작")
     
     # 태그 수집
     print(f"🏷️ {len(appids)}개 게임의 태그 수집 시작...")
@@ -245,40 +289,70 @@ def main():
     failed_appids = []
     
     try:
-        for idx, appid in enumerate(appids, 1):
-            print(f"[{idx}/{len(appids)}] AppID {appid} 처리 중...")
+        # appid를 배치로 나누기
+        batch_size = max(1, len(appids) // len(drivers))
+        appid_batches = [appids[i:i + batch_size] for i in range(0, len(appids), batch_size)]
+        
+        print(f"📦 {len(appid_batches)}개 배치로 나누어 병렬 처리")
+        
+        # 병렬 처리 실행
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(drivers)) as executor:
+            futures = []
+            results_queue = Queue()
+            failed_queue = Queue()
             
-            result = get_game_tags(driver, appid)
+            # 각 드라이버에 배치 할당 (모든 배치 처리)
+            for i, batch in enumerate(appid_batches):
+                driver_idx = i % len(drivers)  # 0, 1, 2, 0, 1, 2... 순환
+                driver = drivers[driver_idx]  # 0, 1, 2, 0, 1, 2... 순환
+                driver_id = driver_idx + 1  # 1, 2, 3, 1, 2, 3... 순환
+                future = executor.submit(process_appid_batch, batch, driver, results_queue, failed_queue, driver_id)
+                futures.append(future)
+                print(f"  🚀 배치 {i+1} ({len(batch)}개 게임) - 드라이버 {driver_id}에 할당")
             
-            if result:
-                new_tags_data.append(result)
-                all_tags_data.append(result)
-                print(f"  ✅ '{result['game_title']}' - {result['tag_count']}개 태그 수집")
-            else:
-                failed_appids.append(appid)
-                print(f"  ❌ AppID {appid} 처리 실패")
-            
-            # 중간 저장 (매 50개마다)
-            if idx % 50 == 0 or idx == len(appids):
-                save_tags_data(all_tags_data, output_csv)
-                print(f"  💾 중간 저장 완료: {len(all_tags_data)}개 게임 (새로 수집: {len(new_tags_data)}개)")
-            
-            # 요청 간 지연 (속도 향상)
-            sleep_jitter(0.5, 1.0)
+            # 결과 수집
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    # 결과 큐에서 데이터 가져오기
+                    while not results_queue.empty():
+                        batch_results = results_queue.get()
+                        new_tags_data.extend(batch_results)
+                        all_tags_data.extend(batch_results)
+                    
+                    # 실패한 appid 큐에서 데이터 가져오기
+                    while not failed_queue.empty():
+                        batch_failed = failed_queue.get()
+                        failed_appids.extend(batch_failed)
+                        
+                except Exception as e:
+                    print(f"⚠️ 배치 처리 중 오류: {e}")
     
     except KeyboardInterrupt:
         print("\n⚠️ 사용자에 의해 중단되었습니다.")
+        print("💾 중단 시에도 현재까지 수집된 데이터를 저장합니다...")
+        
+        # 중단 시에도 저장
+        if all_tags_data:
+            save_tags_data(all_tags_data, output_csv)
+            print(f"✅ 중단 시 저장 완료: {len(all_tags_data)}개 게임")
     
     except Exception as e:
         print(f"⚠️ 예상치 못한 오류: {e}")
+        
+        # 오류 발생 시에도 저장
+        if all_tags_data:
+            save_tags_data(all_tags_data, output_csv)
+            print(f"✅ 오류 발생 시 저장 완료: {len(all_tags_data)}개 게임")
     
     finally:
         # 웹드라이버 종료
-        driver.quit()
-        print("🛑 웹드라이버 종료")
+        for i, driver in enumerate(drivers):
+            driver.quit()
+            print(f"🛑 드라이버 {i+1} 종료")
     
-    # 최종 결과 저장
-    save_tags_data(all_tags_data, output_csv)
+    # 최종 결과 저장 (정상 완료 시)
+    if all_tags_data and not KeyboardInterrupt:
+        save_tags_data(all_tags_data, output_csv)
     
     # 태그 문자열 정리 (',,' 제거)
     print("\n🧹 태그 문자열 정리 중...")
@@ -289,12 +363,7 @@ def main():
             # ',,'가 존재할 경우에만 ', '를 ''로 변경
             if ',,' in original_tags:
                 cleaned_tags = original_tags.replace(', ', '')
-            else:
-                cleaned_tags = original_tags
-            
-            if cleaned_tags != original_tags:
                 item['tags'] = cleaned_tags
-
 
     
     # 결과 요약

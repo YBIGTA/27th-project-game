@@ -98,12 +98,15 @@ async def main_async(input_csv="../outputs/steam_reviews.csv",
 
     out_df = pd.DataFrame(results)
 
-    # 리뷰 1개뿐인 유저 제거 (협업 필터링 위해)
-    if "steamid" in out_df.columns:
-        filtered = out_df.groupby("steamid").filter(lambda x: len(x) > 1)
-    else:
-        print("⚠️ steamid 컬럼 없음! 원본 그대로 저장")
-        filtered = out_df
+    # 리뷰 1개뿐인 유저 제거 (협업 필터링 위해) - 주석 처리됨
+    # if "steamid" in out_df.columns:
+    #     filtered = out_df.groupby("steamid").filter(lambda x: len(x) > 1)
+    # else:
+    #     print("⚠️ steamid 컬럼 없음! 원본 그대로 저장")
+    #     filtered = out_df
+
+    # 모든 데이터 유지 (필터링 제거)
+    filtered = out_df
 
     filtered.to_csv(out_csv, index=False)
     print(f"✅ 저장 완료: {out_csv} (최종 {len(filtered)}개 리뷰)")
