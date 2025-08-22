@@ -9,3 +9,5 @@ numpy>=1.21.0
 tqdm>=4.64.0
 scikit-learn>=1.0.0
 networkx>=2.6.0
+scipy>=1.10.0
+sentence-transformers>=5.1.0
