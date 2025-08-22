@@ -1,5 +1,0 @@
-[33m8bdd28a[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m Add complete game recommendation pipeline (Step 1-9) with documentation
-[33m609726a[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge pull request #3 from YBIGTA/feat/user-game_scores
-[33mf252586[m[33m ([m[1;31morigin/feat/user-game_scores[m[33m)[m Add files via upload
-[33m640e0fe[m update
-[33m5c55cdd[m Create steam_tags_crawler.py
