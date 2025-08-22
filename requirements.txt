@@ -9,3 +9,11 @@ numpy>=1.21.0
 tqdm>=4.64.0
 scikit-learn>=1.0.0
 networkx>=2.6.0
+streamlit
+pymongo
+langchain
+langchain-openai
+python-dotenv
+faiss-cpu
+upstage-ai
+langgraph
