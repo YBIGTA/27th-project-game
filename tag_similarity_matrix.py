@@ -1,38 +1,61 @@
-from collections import defaultdict
-from itertools import combinations
 import pandas as pd
-from tqdm import tqdm   # ✅ 진행상황 표시
+from pathlib import Path
+import argparse
+from sklearn.metrics.pairwise import cosine_similarity
 
-# CSV 불러오기
-df_scores = pd.read_csv("user_game_scores_penalty.csv")
-df_tags = pd.read_csv("steam_games_tags.csv")
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR
 
-# 태그 explode
-df_tags = df_tags.assign(tag=df_tags["tags"].str.split(", ")).explode("tag")
-df = df_scores.merge(df_tags[["appid", "tag"]], on="appid", how="inner")
-df = df[["appid", "steamid", "game_score", "tag"]]
 
-# ✅ 시너지 계산
-tag_synergy = defaultdict(float)
-user_count = defaultdict(int)
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Compute cosine similarity between game tags from user scores")
+    parser.add_argument(
+        "--scores", type=str,
+        default=str(PROJECT_ROOT / "outputs" / "user_game_scores.csv"),
+        help="Path to user_game_scores CSV (default: outputs/user_game_scores.csv)"
+    )
+    parser.add_argument(
+        "--tags", type=str,
+        default=str(PROJECT_ROOT / "outputs" / "steam_games_tags.csv"),
+        help="Path to steam_games_tags CSV (default: outputs/steam_games_tags.csv)"
+    )
+    parser.add_argument(
+        "-o", "--output", type=str,
+        default=str(PROJECT_ROOT / "outputs" / "tag_similarity_cosine.csv"),
+        help="Output path for similarity CSV (default: outputs/tag_similarity_cosine.csv)"
+    )
+    return parser.parse_args()
 
-print("🚀 태그 시너지 계산 시작...")
 
-for steamid, group in tqdm(df.groupby("steamid"), total=df["steamid"].nunique()):
-    tag_scores = group.groupby("tag")["game_score"].sum()
-    
-    for t1, t2 in combinations(tag_scores.index, 2):
-        score = tag_scores[t1] * tag_scores[t2]
-        key = tuple(sorted([t1, t2]))   # 중복 제거
-        tag_synergy[key] += score
-        user_count[key] += 1            # 해당 쌍을 평가한 유저 수 기록
+args = _parse_args()
 
-# ✅ 결과 저장 (raw + 정규화)
-tag_synergy_df = pd.DataFrame(
-    [(t1, t2, raw, raw / user_count[(t1, t2)]) 
-     for (t1, t2), raw in tag_synergy.items()],
-    columns=["tag1", "tag2", "raw_synergy", "norm_synergy"]
+# --- 데이터 불러오기 ---
+df_scores = pd.read_csv(args.scores)  # columns include: appid, steamid, s_round10_rec
+df_tags = pd.read_csv(args.tags)      # columns include: appid, game_title, tags
+
+# 태그 explode (NaN 안전 처리, 공백 제거)
+tags_series = df_tags["tags"].fillna("").astype(str).str.replace(";", ",")
+df_tags = df_tags.assign(tag=tags_series.str.split(",")).explode("tag")
+df_tags["tag"] = df_tags["tag"].astype(str).str.strip()
+df_tags = df_tags[df_tags["tag"] != ""]
+
+# 유저-태그 점수 매트릭스 생성
+value_col = "s_round10_rec" if "s_round10_rec" in df_scores.columns else (
+    "game_score" if "game_score" in df_scores.columns else None
 )
+if value_col is None:
+    raise ValueError("점수 컬럼을 찾을 수 없습니다. 's_round10_rec' 또는 'game_score'가 필요합니다.")
 
-tag_synergy_df.to_csv("tag_synergy_matrix.csv", index=False)
-print("✅ 저장 완료: tag_synergy_matrix.csv")
+df = df_scores.merge(df_tags[["appid", "tag"]], on="appid", how="inner")
+user_tag_matrix = df.pivot_table(index="steamid", columns="tag", values=value_col, aggfunc="sum", fill_value=0)
+
+# --- 코사인 유사도 계산 ---
+tags = user_tag_matrix.columns
+similarity_matrix = cosine_similarity(user_tag_matrix.T)   # 태그 간 유사도 (전치해서 tag 기준으로)
+similarity_df = pd.DataFrame(similarity_matrix, index=tags, columns=tags)
+
+# 저장
+out_path = Path(args.output)
+out_path.parent.mkdir(parents=True, exist_ok=True)
+similarity_df.to_csv(out_path)
+print(f"✅ 저장 완료: {out_path}")
