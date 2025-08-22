@@ -11,3 +11,12 @@ scikit-learn>=1.0.0
 networkx>=2.6.0
 scipy>=1.10.0
 sentence-transformers>=5.1.0
+streamlit
+pymongo
+langchain
+langchain-openai
+python-dotenv
+faiss-cpu
+upstage-ai
+langgraph
+
