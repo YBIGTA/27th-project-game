@@ -1,3 +1,4 @@
+
 import streamlit as st
 import os
 import json
@@ -6,7 +7,7 @@ from typing import TypedDict, List, Any
 import numpy as np
 import pandas as pd
 
-from langchain_openai import ChatOpenAI
+from langchain_upstage import ChatUpstage
 from langchain.schema.messages import HumanMessage, SystemMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
@@ -36,7 +37,8 @@ def init_recommender():
 
 @st.cache_resource
 def init_llm():
-    return ChatOpenAI(model_name="gpt-4-turbo", temperature=0.7, api_key=UPSTAGE_API_KEY)
+    # ChatOpenAI 대신 ChatUpstage 사용
+    return ChatUpstage(api_key=UPSTAGE_API_KEY)
 
 recommender = init_recommender()
 llm = init_llm()
@@ -62,7 +64,7 @@ def rerank_node(state: GraphState):
     appids = state['candidate_appids']
     query_vec = state['query_vector']
     weights = state['rerank_weights']
-    reranked_df = recommender.rerank_candidates(appids, query_vec, weights, top_n=5) # 최종 5개 선택
+    reranked_df = recommender.rerank_candidates(appids, query_vec, weights, top_n=5)
     state['final_results'] = reranked_df
     return state
 
@@ -103,15 +105,18 @@ with st.sidebar:
     user_weights = {
         "tag_match": st.slider("TagMatch (쿼리-게임 유사도)", 0, 10, 8),
         "novelty": st.slider("Novelty (새로움)", 0, 10, 2),
-        "recency": st.slider("Recency (최신성)", 0, 10, 5),
-        "popularity": st.slider("Popularity (인기도)", 0, 10, 6)
     }
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [SystemMessage(content="안녕하세요! 어떤 게임을 추천해드릴까요?")]
+    st.session_state.messages = [AIMessage(content="안녕하세요! 어떤 게임을 추천해드릴까요?")]
 
 for msg in st.session_state.messages:
-    st.chat_message(msg.role).write(msg.content)
+    if isinstance(msg, AIMessage):
+        st.chat_message("assistant").write(msg.content)
+    elif isinstance(msg, HumanMessage):
+        st.chat_message("user").write(msg.content)
+    elif isinstance(msg, SystemMessage):
+        st.chat_message("assistant").write(msg.content)
 
 if prompt := st.chat_input("질문을 입력하세요."):
     st.session_state.messages.append(HumanMessage(content=prompt))

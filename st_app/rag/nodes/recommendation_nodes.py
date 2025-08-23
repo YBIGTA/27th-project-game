@@ -1,4 +1,3 @@
-
 def similar_node(state, recommender):
     result = recommender.recommend_similar(state['parsed_json'])
     state['candidate_appids'] = result.get("candidates", [])

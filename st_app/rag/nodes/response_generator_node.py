@@ -11,11 +11,8 @@ def generate_response_node(state, llm):
     else:
         context = ""
         for idx, row in reranked_results.iterrows():
-            context += f"- Game: {row['title']}\n"
+            context += f"- Game: {row['game_title']}\n"
             context += f"  - Matched Score (0-1): {row['tag_match_score']:.2f}\n"
-            context += f"  - Release Date: {row['release_date'].strftime('%Y-%m-%d')}\n"
-            context += f"  - Price (KRW): {row['price_krw']}\n"
-            context += f"  - Supports Korean: {row['languages'] and 'ko' in row['languages']}\n"
             context += f"---\n"
 
         prompt_template = """You are a helpful and friendly game recommender chatbot.

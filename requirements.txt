@@ -17,6 +17,7 @@ langchain
 langchain-openai
 python-dotenv
 faiss-cpu
-upstage-ai
+langchain-upstage
+openai
 langgraph
 
