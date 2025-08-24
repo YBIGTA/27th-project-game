@@ -1,4 +1,3 @@
-
 import streamlit as st
 import os
 import json
@@ -19,7 +18,8 @@ from rag.nodes import (
     hybrid_node,
     general_node,
     route_by_mode,
-    generate_response_node
+    generate_response_node,
+    game_name_normalizer_node
 )
 
 # --- 초기화 --- #
@@ -55,6 +55,7 @@ class GraphState(TypedDict):
 
 # 각 노드에 리소스(llm, recommender)를 주입하는 래퍼 함수
 def build_parser_node(state): return llm_parser_node(state, llm)
+def build_normalizer_node(state): return game_name_normalizer_node(state, recommender)
 def build_similar_node(state): return similar_node(state, recommender)
 def build_vibe_node(state): return vibe_node(state, recommender)
 def build_hybrid_node(state): return hybrid_node(state, recommender)
@@ -71,6 +72,7 @@ def rerank_node(state: GraphState):
 # --- 그래프 빌드 --- #
 workflow = StateGraph(GraphState)
 workflow.add_node("parser_node", build_parser_node)
+workflow.add_node("normalizer_node", build_normalizer_node)
 workflow.add_node("similar_node", build_similar_node)
 workflow.add_node("vibe_node", build_vibe_node)
 workflow.add_node("hybrid_node", build_hybrid_node)
@@ -79,8 +81,10 @@ workflow.add_node("general_node", general_node)
 workflow.add_node("response_generator_node", build_response_generator_node)
 
 workflow.set_entry_point("parser_node")
+workflow.add_edge("parser_node", "normalizer_node")
 workflow.add_conditional_edges(
-    "parser_node", route_by_mode,
+    "normalizer_node", 
+    route_by_mode,
     {
         "similar_node": "similar_node", "vibe_node": "vibe_node",
         "hybrid_node": "hybrid_node", "general_node": "general_node",
@@ -97,7 +101,7 @@ workflow.add_edge('response_generator_node', END)
 app_graph = workflow.compile()
 
 # --- Streamlit UI --- #
-st.title("✨ LangGraph RAG 챗봇")
+st.title("✨ 게임 추천 서비스")
 
 with st.sidebar:
     st.header("재정렬 가중치 설정")
@@ -123,12 +127,56 @@ if prompt := st.chat_input("질문을 입력하세요."):
     st.chat_message("user").write(prompt)
 
     with st.spinner("추천 중..."):
+        status = st.empty()
+        json_container = st.empty()
+        
         try:
             graph_input = {"user_query": prompt, "rerank_weights": user_weights}
-            final_state = app_graph.invoke(graph_input)
-            response_content = final_state.get('final_results', "오류: 최종 응답을 생성하지 못했습니다.")
-        except Exception as e:
-            response_content = f"오류가 발생했습니다: {e}"
+            executed_nodes = []
+            latest_state = None
 
-    st.session_state.messages.append(AIMessage(content=response_content))
-    st.chat_message("assistant").write(response_content)
+            for event in app_graph.stream(graph_input):
+                for node_name, node_state in event.items():
+                    executed_nodes.append(node_name)
+                    path_str = " -> ".join(f"`{node}`" for node in executed_nodes)
+                    status.info(f"**실행 경로:** {path_str}")
+
+                    if node_name == "parser_node":
+                        parsed_json = node_state.get('parsed_json', {})
+                        with json_container.container():
+                            st.markdown("---")
+                            st.markdown("**`parser_node` 실행 결과:**")
+                            st.json(parsed_json)
+                            st.markdown("---")
+                    
+                    latest_state = node_state
+
+            final_state = latest_state
+
+            status.empty()
+            json_container.empty()
+
+            if final_state:
+                response_content = final_state.get('final_results', "오류: 최종 응답을 생성하지 못했습니다.")
+                
+                with st.chat_message("assistant"):
+                    if isinstance(response_content, pd.DataFrame):
+                        st.markdown("### 추천 게임 목록")
+                        st.dataframe(response_content)
+                        st.session_state.messages.append(AIMessage(content=response_content.to_markdown(index=False)))
+                    else:
+                        if isinstance(response_content, list):
+                            response_content = '\n'.join(map(str, response_content))
+                        st.markdown(response_content)
+                        st.session_state.messages.append(AIMessage(content=str(response_content)))
+            else:
+                with st.chat_message("assistant"):
+                    st.error("추천을 생성하지 못했습니다 (그래프가 완료되지 않음).")
+
+        except Exception as e:
+            st.error("그래프 실행 중 오류가 발생했습니다.")
+            st.exception(e)
+            response_content = f"오류가 발생했습니다: {e}"
+            st.session_state.messages.append(AIMessage(content=response_content))
+            status.empty()
+            json_container.empty()

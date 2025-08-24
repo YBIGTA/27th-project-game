@@ -71,11 +71,30 @@ JSON:
 Question: {question}
 JSON:
 """
-    parser_prompt = PromptTemplate(template=parser_prompt_template, input_variables=["question"])
-    parser_chain = LLMChain(llm=llm, prompt=parser_prompt)
+    parser_prompt = PromptTemplate.from_template(parser_prompt_template)
+    # LangChain Expression Language (LCEL) 사용
+    parser_chain = parser_prompt | llm
     
-    result_str = parser_chain.run(prompt)
-    cleaned_str = result_str.strip().replace('```json', '').replace('```', '').strip()
-    parsed_json = json.loads(cleaned_str)
+    result = parser_chain.invoke({"question": prompt})
+    result_str = result.content
+    
+    try:
+        # Find the start and end of the JSON object
+        start_index = result_str.find('{')
+        end_index = result_str.rfind('}')
+        
+        if start_index != -1 and end_index != -1:
+            json_str = result_str[start_index:end_index+1]
+            parsed_json = json.loads(json_str)
+        else:
+            # Fallback if no JSON object is found
+            parsed_json = {"mode": "general"}
+            
+    except json.JSONDecodeError as e:
+        # Handle cases where the extracted string is still not valid JSON
+        print(f"Failed to parse JSON: {e}")
+        # Fallback or error state
+        parsed_json = {"mode": "general"}
+
     state['parsed_json'] = parsed_json
     return state
