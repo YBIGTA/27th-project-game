@@ -5,7 +5,9 @@ from pathlib import Path
 import json
 from sentence_transformers import SentenceTransformer
 from sklearn.linear_model import Ridge
-
+import os
+from dotenv import load_dotenv
+from langchain_upstage import UpstageEmbeddings
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Step 7: Text-to-tag alignment matrix")
@@ -46,7 +48,6 @@ def _parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
 def create_tag_texts(tag_names: list) -> list:
     """
     태그 이름을 문장으로 변환
@@ -71,7 +72,6 @@ def create_tag_texts(tag_names: list) -> list:
         tag_texts.append(tag_text)
     
     return tag_texts
-
 
 def compute_alignment_matrix(T: np.ndarray, tag_vecs: np.ndarray, lambda_reg: float) -> np.ndarray:
     """
@@ -98,7 +98,6 @@ def compute_alignment_matrix(T: np.ndarray, tag_vecs: np.ndarray, lambda_reg: fl
     
     return W
 
-
 def main(tag_vecs_path: str, index_path: str, model_name: str, lambda_reg: float,
          tag_text_path: str, align_path: str, stats_path: str):
     print(f"[INFO] 입력 파일 로드:")
@@ -123,18 +122,39 @@ def main(tag_vecs_path: str, index_path: str, model_name: str, lambda_reg: float
     print(f"   - 태그 벡터: {tag_vecs.shape}")
     print(f"   - 태그 수: {len(tag_names)}")
     
-    # 문장 임베딩 모델 로드
-    print(f"[INFO] 문장 임베딩 모델 로드 중: {model_name}")
-    model = SentenceTransformer(model_name)
-    
     # 태그 텍스트 생성
     print("[INFO] 태그 텍스트 생성 중...")
     tag_texts = create_tag_texts(tag_names)
+
+    # 문장 임베딩 모델 로드 및 임베딩 수행
+    print(f"[INFO] 문장 임베딩 모델 로드 중: {model_name}")
     
-    # 태그 텍스트 임베딩
-    print("[INFO] 태그 텍스트 임베딩 중...")
-    T = model.encode(tag_texts, show_progress_bar=True)
-    
+    # 모델 종류에 따라 분기
+    if "solar" in model_name:
+        print("[INFO] Upstage API 모델을 사용합니다.")
+        load_dotenv()
+        api_key = os.environ.get("UPSTAGE_API_KEY")
+        if not api_key:
+            raise ValueError("UPSTAGE_API_KEY가 .env 파일에 설정되어야 합니다.")
+        
+        model = UpstageEmbeddings(model=model_name, api_key=api_key)
+        
+        print("[INFO] 태그 텍스트 임베딩 중 (Upstage API)...")
+        T = np.array(model.embed_documents(tag_texts))
+        
+        print("[INFO] 정렬 행렬 테스트용 임베딩...")
+        test_embedding = np.array(model.embed_query("action adventure game"))
+
+    else:
+        print("[INFO] SentenceTransformer 모델을 사용합니다.")
+        model = SentenceTransformer(model_name)
+        
+        print("[INFO] 태그 텍스트 임베딩 중 (SentenceTransformer)...")
+        T = model.encode(tag_texts, show_progress_bar=True)
+        
+        print("[INFO] 정렬 행렬 테스트용 임베딩...")
+        test_embedding = model.encode(["action adventure game"])[0]
+
     print(f"[INFO] 텍스트 임베딩 크기: {T.shape}")
     
     # 정렬 행렬 계산
@@ -181,7 +201,7 @@ def main(tag_vecs_path: str, index_path: str, model_name: str, lambda_reg: float
     # 정렬 행렬 테스트
     print(f"\n[INFO] 정렬 행렬 테스트:")
     test_phrase = "action adventure game"
-    test_embedding = model.encode([test_phrase])[0]
+    # test_embedding is already calculated above
     predicted_tag_vec = test_embedding @ W
     
     # 가장 유사한 태그 찾기

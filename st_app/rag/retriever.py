@@ -3,12 +3,13 @@ import numpy as np
 import pandas as pd
 import faiss
 import json
+import copy
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_upstage import UpstageEmbeddings
 
 class VectorBasedRecommender:
-    def __init__(self, data_path):
-        self.embeddings = UpstageEmbeddings(model="solar-embedding-v1")
+    def __init__(self, data_path, embedding_model="solar-embedding-1-large"):
+        self.embeddings = UpstageEmbeddings(model=embedding_model)
         self.data_path = data_path
         self._load_data()
 
@@ -66,7 +67,7 @@ class VectorBasedRecommender:
             if tag_name and tag_name not in existing_tags:
                 expanded_tags[tag_name] = similarities[0][idx]
 
-        expanded_json = parsed_json.copy()
+        expanded_json = copy.deepcopy(parsed_json)
         if 'target_tags' not in expanded_json: expanded_json['target_tags'] = []
         for tag, weight in expanded_tags.items():
             expanded_json['target_tags'].append({"name": tag, "weight": round(float(weight), 4)})
@@ -76,14 +77,38 @@ class VectorBasedRecommender:
     def _create_query_vector(self, parsed_json):
         if self.tag_vecs is None: return np.zeros(1)
         final_vector = np.zeros(self.tag_vecs.shape[1], dtype=np.float32)
-        for tag_info in parsed_json.get('target_tags', []):
+        
+        tag_infos = parsed_json.get('target_tags', [])
+        if not tag_infos:
+            return final_vector
+
+        for tag_info in tag_infos:
             tag_name = tag_info.get('name')
             if tag_name in self.tag_to_idx:
                 weight = tag_info.get('weight', 1.0)
-                final_vector += self.tag_vecs[self.tag_to_idx[tag_name]] * weight
+                # NaN/Inf check for weight
+                if not np.isfinite(weight):
+                    print(f"Warning: Invalid weight '{weight}' for tag '{tag_name}'. Skipping.")
+                    continue
+                
+                tag_vector = self.tag_vecs[self.tag_to_idx[tag_name]]
+                
+                # NaN/Inf check for tag vector
+                if not np.all(np.isfinite(tag_vector)):
+                    print(f"Warning: Invalid vector for tag '{tag_name}'. Skipping.")
+                    continue
+
+                final_vector += tag_vector * weight
+
         for tag_name in parsed_json.get('avoid_tags', []):
             if tag_name in self.tag_to_idx:
                 final_vector -= self.tag_vecs[self.tag_to_idx[tag_name]]
+        
+        # Final check on the resulting vector
+        if not np.all(np.isfinite(final_vector)):
+            print("Error: Final query vector contains NaN/Inf values. Resetting to zero vector.")
+            return np.zeros(self.tag_vecs.shape[1], dtype=np.float32)
+
         return final_vector
 
     def recommend_similar(self, parsed_json, top_k=200):
@@ -99,17 +124,69 @@ class VectorBasedRecommender:
                 seed_vectors.append(self.game_vecs[self.appid_to_idx[appid]])
         if not seed_vectors: return {"error": f"Seed games not found: {seed_game_titles}"}
         query_vector = np.mean(seed_vectors, axis=0).reshape(1, -1)
+
+        # L2 정규화 추가
+        norm = np.linalg.norm(query_vector)
+        if norm > 0:
+            query_vector = query_vector / norm
+
         distances, indices = self.faiss_index.search(query_vector, top_k + len(seed_appids))
         candidate_appids = [self.idx_to_appid[i] for i in indices[0] if self.idx_to_appid[i] not in seed_appids]
         return {"candidates": candidate_appids[:top_k], "query_vector": query_vector}
 
     def recommend_vibe(self, parsed_json, top_k=200):
-        if not self.faiss_index: return {"error": "Recommender not initialized"}
-        query_vector = self._create_query_vector(parsed_json).reshape(1, -1)
-        if np.all(query_vector == 0): return {"error": "No valid tags"}
+        print("---\\n--- [Vibe Node] Execution Start ---")
+        print(f"Initial JSON: {json.dumps(parsed_json, indent=2)}")
+
+        if not self.faiss_index: 
+            print("Error: Recommender not initialized")
+            return {"error": "Recommender not initialized"}
+        
+        print("\\nStep 1: Expanding query tags...")
+        # Use deepcopy to avoid side effects
+        expanded_json = copy.deepcopy(parsed_json)
+        expanded_json = self.expand_query_tags(expanded_json)
+        print(f"Expanded JSON: {json.dumps(expanded_json, indent=2)}")
+        
+        print("\\nStep 2: Creating query vector...")
+        query_vector = self._create_query_vector(expanded_json).reshape(1, -1)
+        print(f"Query vector created. Shape: {query_vector.shape}, Norm: {np.linalg.norm(query_vector)}")
+        
+        if np.all(query_vector == 0): 
+            print("Error: Query vector is a zero vector.")
+            return {"error": "No valid tags"}
+        
+        print("\\nStep 3: Normalizing query vector...")
+        norm = np.linalg.norm(query_vector)
+        if norm > 0:
+            query_vector = query_vector / norm
+        print(f"Query vector normalized. New Norm: {np.linalg.norm(query_vector)}")
+
+        print(f"\\nStep 4: Searching FAISS index with top_k={top_k}...")
         distances, indices = self.faiss_index.search(query_vector, top_k)
-        candidate_appids = [self.idx_to_appid[i] for i in indices[0]]
-        return {"candidates": candidate_appids, "query_vector": query_vector}
+        print(f"FAISS search complete.")
+        print(f"Distances: {distances}")
+        print(f"Indices: {indices}")
+
+        print("\\nStep 5: Mapping indices to app IDs...")
+        if len(indices[0]) > 0:
+            candidate_appids = [self.idx_to_appid[i] for i in indices[0]]
+            print(f"Found {len(candidate_appids)} candidate app IDs.")
+        else:
+            candidate_appids = []
+            print("No candidates found from FAISS search.")
+
+        final_result = {"candidates": candidate_appids, "query_vector": query_vector}
+        # Use a try-except for the final print as the result can be large
+        try:
+            print(f"\\nFinal Result: {json.dumps(final_result, indent=2)}")
+        except TypeError:
+            print("\\nFinal Result: (Could not serialize the full result object)")
+            print(f"Candidates count: {len(final_result['candidates'])}")
+
+        print("--- [Vibe Node] Execution End ---")
+        
+        return final_result
 
     def recommend_hybrid(self, parsed_json, top_k=200):
         if not self.faiss_index: return {"error": "Recommender not initialized"}
@@ -118,9 +195,20 @@ class VectorBasedRecommender:
         if game_row.empty: return {"error": f"Game '{game_title}' not found."}
         game_appid = game_row.index[0]
         base_game_vector = self.game_vecs[self.appid_to_idx[game_appid]]
-        vibe_vector = self._create_query_vector(parsed_json)
+
+        # Apply expansion logic to the vibe component
+        expanded_json = copy.deepcopy(parsed_json)
+        expanded_json = self.expand_query_tags(expanded_json)
+        vibe_vector = self._create_query_vector(expanded_json)
+        
         weights = parsed_json.get('weights', {"similar_weight": 0.5, "vibe_weight": 0.5})
         query_vector = (weights['similar_weight'] * base_game_vector + weights['vibe_weight'] * vibe_vector).reshape(1, -1)
+
+        # L2 정규화 추가
+        norm = np.linalg.norm(query_vector)
+        if norm > 0:
+            query_vector = query_vector / norm
+
         distances, indices = self.faiss_index.search(query_vector, top_k + 1)
         candidate_appids = [self.idx_to_appid[i] for i in indices[0] if self.idx_to_appid[i] != game_appid]
         return {"candidates": candidate_appids[:top_k], "query_vector": query_vector}

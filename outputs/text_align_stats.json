@@ -1,12 +1,12 @@
 {
   "text_embedding_info": {
-    "model": "all-MiniLM-L6-v2",
-    "text_embedding_dim": 384,
+    "model": "solar-embedding-1-large",
+    "text_embedding_dim": 4096,
     "num_tags": 393
   },
   "alignment_info": {
     "alignment_matrix_shape": [
-      384,
+      4096,
       128
     ],
     "lambda_reg": 0.01

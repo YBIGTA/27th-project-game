@@ -33,7 +33,9 @@ if not UPSTAGE_API_KEY:
 @st.cache_resource
 def init_recommender():
     data_path = os.path.join(os.path.dirname(__file__), 'data')
-    return VectorBasedRecommender(data_path=data_path)
+    # Allow overriding the model from an environment variable or use a new default
+    embedding_model = os.environ.get("UPSTAGE_EMBEDDING_MODEL", "solar-embedding-1-large")
+    return VectorBasedRecommender(data_path=data_path, embedding_model=embedding_model)
 
 @st.cache_resource
 def init_llm():
