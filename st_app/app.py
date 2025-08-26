@@ -158,6 +158,14 @@ if prompt := st.chat_input("질문을 입력하세요."):
 
                             elif node_name in ["similar_node", "vibe_node", "hybrid_node"]:
                                 st.markdown(f"`{node_name}`에 따라 후보 게임 목록을 생성합니다.")
+                                    # 🔽 확장된 태그 보여주기 (expand_query_tags가 앞 단계에서 실행되어 state에 반영된 경우)
+                                expanded_tags = node_state.get('parsed_json', {}).get('target_tags', [])
+                                if expanded_tags:
+                                    st.markdown("**확장된 타겟 태그 (name, weight)**")
+                                    st.json(expanded_tags)
+                                else:
+                                    st.caption("확장된 태그 없음")
+
                                 candidate_ids = node_state.get('candidate_appids', [])
                                 st.write("후보 AppIDs:", candidate_ids)
                                 if candidate_ids:
