@@ -134,6 +134,49 @@ class VectorBasedRecommender:
         candidate_appids = [self.idx_to_appid[i] for i in indices[0] if self.idx_to_appid[i] not in seed_appids]
         return {"candidates": candidate_appids[:top_k], "query_vector": query_vector}
 
+    def recommend_similar_with_weights(self, seed_games_with_weights, top_k=200):
+        if not self.faiss_index: return {"error": "Recommender not initialized"}
+        if not seed_games_with_weights: return {"error": "No seed games with weights"}
+
+        seed_vectors = []
+        total_weight = 0.0
+        seed_appids = set()
+
+        for game_info in seed_games_with_weights:
+            title = game_info.get('name')
+            weight = game_info.get('weight', 0.0)
+            
+            if weight <= 0:
+                continue
+
+            game_row = self.games_df[self.games_df['game_title'].str.lower() == title.lower()]
+            if not game_row.empty:
+                appid = game_row.index[0]
+                if appid in seed_appids:
+                    continue
+
+                seed_appids.add(appid)
+                game_vector = self.game_vecs[self.appid_to_idx[appid]]
+                seed_vectors.append(game_vector * weight)
+                total_weight += weight
+
+        if not seed_vectors: return {"error": f"None of the seed games were found or had positive weights."}
+        
+        # Calculate the weighted average of the vectors
+        if total_weight > 0:
+            query_vector = np.sum(seed_vectors, axis=0).reshape(1, -1) / total_weight
+        else:
+            return {"error": "Total weight is zero, cannot compute weighted average."}
+
+        # L2 정규화 추가
+        norm = np.linalg.norm(query_vector)
+        if norm > 0:
+            query_vector = query_vector / norm
+
+        distances, indices = self.faiss_index.search(query_vector, top_k + len(seed_appids))
+        candidate_appids = [self.idx_to_appid[i] for i in indices[0] if self.idx_to_appid[i] not in seed_appids]
+        return {"candidates": candidate_appids[:top_k], "query_vector": query_vector}
+
     def recommend_vibe(self, parsed_json, top_k=200):
         print("---\\n--- [Vibe Node] Execution Start ---")
         print(f"Initial JSON: {json.dumps(parsed_json, indent=2)}")
